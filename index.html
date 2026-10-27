@@ -3,31 +3,39 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Foggy Mirror</title>
+<title>Foggy Mirror v4</title>
 <style>
   :root { color-scheme: dark; }
-  body { margin: 0; display: flex; min-height: 100vh; background: #111; color: #eee;
+  body { margin: 0; min-height: 100vh; background: #111; color: #eee; overflow: hidden;
          font-family: system-ui, -apple-system, sans-serif; }
-  main { flex: 1; position: relative; display: flex; align-items: center;
-         justify-content: center; padding: 12px; }
+  main { position: relative; min-height: 100vh; display: flex; align-items: center;
+         justify-content: center; padding: 12px; box-sizing: border-box; }
   canvas { max-width: 100%; max-height: calc(100vh - 24px); background: #000; border-radius: 8px; }
   #overlay { position: absolute; inset: 0; display: flex; flex-direction: column;
              align-items: center; justify-content: center; gap: 12px; text-align: center; padding: 24px; }
   #overlay[hidden] { display: none; }
   #overlay h1 { margin: 0; font-weight: 600; }
   #overlay p { margin: 0; color: #aaa; max-width: 32ch; }
-  aside { width: 240px; padding: 16px; background: #1b1b1b; display: flex;
-          flex-direction: column; gap: 14px; }
-  label { display: block; font-size: 14px; }
-  label input { width: 100%; margin-top: 6px; }
+
   button { padding: 10px; border: 0; border-radius: 6px; background: #3b82f6;
            color: #fff; font-size: 15px; cursor: pointer; }
   button:disabled { background: #444; cursor: default; }
   button.secondary { background: #333; }
-  @media (max-width: 700px) {
-    body { flex-direction: column; }
-    aside { width: auto; }
-  }
+
+  /* Settings drawer */
+  #toggle { position: fixed; top: 12px; right: 12px; z-index: 20; padding: 8px 14px;
+            background: rgba(40, 40, 40, 0.85); backdrop-filter: blur(6px); }
+  #toggle:hover { background: rgba(70, 70, 70, 0.9); }
+  #panel { position: fixed; top: 0; right: 0; bottom: 0; z-index: 10;
+           width: min(280px, 85vw); box-sizing: border-box; padding: 64px 16px 16px;
+           display: flex; flex-direction: column; gap: 14px; overflow-y: auto;
+           background: rgba(27, 27, 27, 0.94); backdrop-filter: blur(8px);
+           box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4);
+           transform: translateX(100%); visibility: hidden;
+           transition: transform 0.25s ease, visibility 0.25s; }
+  #panel.open { transform: translateX(0); visibility: visible; }
+  label { display: block; font-size: 14px; }
+  label input { width: 100%; margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -40,7 +48,9 @@
   </div>
 </main>
 
-<aside>
+<button id="toggle" class="secondary" aria-expanded="false" aria-controls="panel">Settings</button>
+
+<aside id="panel">
   <label>Brush size: <output></output>
     <input type="range" min="10" max="150" value="60" data-key="brush" data-scale="1"></label>
   <label>Fog thickness: <output></output>
@@ -89,7 +99,21 @@ const settings = { brush: 60, fogStrength: 0.6, regrow: 0.09, smoothing: 0.5, pa
 const debug = { on: new URLSearchParams(location.search).has("debug"),
                 fps: 0, det: 0, frames: 0, dets: 0, t: performance.now(),
                 hand: null, pointing: false, error: "" };
-addEventListener("keydown", (e) => { if (e.key === "d") debug.on = !debug.on; });
+
+// Settings drawer: button toggles it, S toggles it, Esc closes it
+const panel = $("panel");
+const toggle = $("toggle");
+function setPanel(open) {
+  panel.classList.toggle("open", open);
+  toggle.textContent = open ? "Close" : "Settings";
+  toggle.setAttribute("aria-expanded", String(open));
+}
+toggle.addEventListener("click", () => setPanel(!panel.classList.contains("open")));
+addEventListener("keydown", (e) => {
+  if (e.key === "Escape") setPanel(false);
+  if (e.key === "s") setPanel(!panel.classList.contains("open"));
+  if (e.key === "d") debug.on = !debug.on;
+});
 
 // Wire every slider to a setting
 for (const input of document.querySelectorAll("input[type=range]")) {
