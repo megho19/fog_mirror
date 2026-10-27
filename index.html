@@ -5,37 +5,52 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Foggy Mirror v4</title>
 <style>
-  :root { color-scheme: dark; }
-  body { margin: 0; min-height: 100vh; background: #f1eded; color: #eee; overflow: hidden;
+    :root {
+    color-scheme: light;
+    --page: #f1eded;          /* page background */
+    --text: #2b2727;          /* main text */
+    --muted: #6b6464;         /* secondary text */
+    --panel: rgba(249, 248, 248, 0.94);
+    --accent: #3b82f6;        /* Start camera button */
+    --accent-text: #ffffff;
+    --btn: #e4e0e0;          /* secondary buttons */
+    --btn-hover: #d3cdcd;
+    --btn-text: #2b2727;
+    --shadow: rgba(0, 0, 0, 0.18);
+  }
+  body { margin: 0; min-height: 100vh; background: var(--page); color: var(--text); overflow: hidden;
          font-family: system-ui, -apple-system, sans-serif; }
   main { position: relative; min-height: 100vh; display: flex; align-items: center;
          justify-content: center; padding: 12px; box-sizing: border-box; }
-  canvas { max-width: 100%; max-height: calc(100vh - 24px); background: #f5f1f1; border-radius: 8px; }
+  canvas { max-width: 100%; max-height: calc(100vh - 24px); background: #f5f1f1;
+           border-radius: 8px; box-shadow: 0 2px 16px var(--shadow); }
   #overlay { position: absolute; inset: 0; display: flex; flex-direction: column;
              align-items: center; justify-content: center; gap: 12px; text-align: center; padding: 24px; }
   #overlay[hidden] { display: none; }
   #overlay h1 { margin: 0; font-weight: 600; }
-  #overlay p { margin: 0; color: #aaa; max-width: 32ch; }
+  #overlay p { margin: 0; color: var(--muted); max-width: 32ch; }
 
-  button { padding: 10px; border: 0; border-radius: 6px; background: #3b82f6;
-           color: #a7a2a2; font-size: 15px; cursor: pointer; }
-  button:disabled { background: #444; cursor: default; }
-  button.secondary { background: #333; }
+  button { padding: 10px; border: 0; border-radius: 6px; background: var(--accent);
+           color: var(--accent-text); font-size: 15px; cursor: pointer; }
+  button:disabled { background: #cfcaca; color: #8a8484; cursor: default; }
+  button.secondary { background: var(--btn); color: var(--btn-text); }
+  button.secondary:hover { background: var(--btn-hover); }
 
   /* Settings drawer */
   #toggle { position: fixed; top: 12px; right: 12px; z-index: 20; padding: 8px 14px;
-            background: rgba(199, 197, 197, 0.85); backdrop-filter: blur(6px); }
-  #toggle:hover { background: rgba(70, 70, 70, 0.9); }
+            background: rgba(255, 255, 255, 0.85); backdrop-filter: blur(6px);
+            box-shadow: 0 1px 6px var(--shadow); }
+  #toggle:hover { background: rgba(230, 226, 226, 0.95); }
   #panel { position: fixed; top: 0; right: 0; bottom: 0; z-index: 10;
            width: min(280px, 85vw); box-sizing: border-box; padding: 64px 16px 16px;
            display: flex; flex-direction: column; gap: 14px; overflow-y: auto;
-           background: rgba(249, 248, 248, 0.94); backdrop-filter: blur(8px);
-           box-shadow: -8px 0 24px rgba(228, 226, 226, 0.4);
+           background: var(--panel); backdrop-filter: blur(8px);
+           box-shadow: -8px 0 24px var(--shadow);
            transform: translateX(100%); visibility: hidden;
            transition: transform 0.25s ease, visibility 0.25s; }
   #panel.open { transform: translateX(0); visibility: visible; }
   label { display: block; font-size: 14px; }
-  label input { width: 100%; margin-top: 6px; }
+  label input { width: 100%; margin-top: 6px; accent-color: var(--accent); }
 </style>
 </head>
 <body>
