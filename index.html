@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Foggy Mirror</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; display: flex; min-height: 100vh; background: #111; color: #eee;
+         font-family: system-ui, -apple-system, sans-serif; }
+  main { flex: 1; position: relative; display: flex; align-items: center;
+         justify-content: center; padding: 12px; }
+  canvas { max-width: 100%; max-height: calc(100vh - 24px); background: #000; border-radius: 8px; }
+  #overlay { position: absolute; inset: 0; display: flex; flex-direction: column;
+             align-items: center; justify-content: center; gap: 12px; text-align: center; padding: 24px; }
+  #overlay[hidden] { display: none; }
+  #overlay h1 { margin: 0; font-weight: 600; }
+  #overlay p { margin: 0; color: #aaa; max-width: 32ch; }
+  aside { width: 240px; padding: 16px; background: #1b1b1b; display: flex;
+          flex-direction: column; gap: 14px; }
+  label { display: block; font-size: 14px; }
+  label input { width: 100%; margin-top: 6px; }
+  button { padding: 10px; border: 0; border-radius: 6px; background: #3b82f6;
+           color: #fff; font-size: 15px; cursor: pointer; }
+  button:disabled { background: #444; cursor: default; }
+  button.secondary { background: #333; }
+  @media (max-width: 700px) {
+    body { flex-direction: column; }
+    aside { width: auto; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <canvas id="view" width="640" height="480"></canvas>
+  <div id="overlay">
+    <h1>Foggy Mirror</h1>
+    <p id="status">Point your index finger at the screen to wipe the fog away.</p>
+    <button id="start">Start camera</button>
+  </div>
+</main>
+
+<aside>
+  <label>Brush size: <output></output>
+    <input type="range" min="10" max="100" value="40" data-key="brush" data-scale="1"></label>
+  <label>Fog thickness: <output></output>
+    <input type="range" min="0" max="100" value="60" data-key="fogStrength" data-scale="0.01"></label>
+  <label>Fog regrow speed: <output></output>
+    <input type="range" min="0" max="100" value="15" data-key="regrow" data-scale="0.006"></label>
+  <label>Smoothing: <output></output>
+    <input type="range" min="10" max="100" value="50" data-key="smoothing" data-scale="0.01"></label>
+  <button id="refill" class="secondary">Refill fog</button>
+  <button id="pause" class="secondary">Pause</button>
+  <button id="save" class="secondary">Save screenshot</button>
+</aside>
+
+<!-- Not display:none, because some browsers skip decoding frames for hidden videos -->
+<video id="video" playsinline muted
+  style="position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01;pointer-events:none"></video>
+
+<script type="module">
+import { HandLandmarker, FilesetResolver } from
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const WASM_URL  = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+
+const CONFIDENCE = 0.3;      // hand detection thresholds (lower = finds partial hands more, more false hits)
+const FOG_DOWNSCALE = 3;     // fog grid is 1/3 of the video size (higher = faster, blockier)
+const BLUR_DOWNSCALE = 12;   // the foggy layer is blurred by shrinking and re-enlarging
+const POINT_START = 1.35;    // index must reach this much farther than the other fingers to start
+const POINT_KEEP = 1.15;     // ...but only this much to keep going (prevents flicker)
+const MAX_MISSED = 6;        // bad detection frames to forgive before ending a stroke
+
+const $ = (id) => document.getElementById(id);
+const video = $("video");
+const canvas = $("view");
+const ctx = canvas.getContext("2d");
+
+const settings = { brush: 40, fogStrength: 0.6, regrow: 0.09, smoothing: 0.5, paused: false };
+
+// Debug overlay: open the page with ?debug on the end of the URL
+const debug = { on: new URLSearchParams(location.search).has("debug"),
+                fps: 0, det: 0, frames: 0, dets: 0, t: performance.now(),
+                hand: null, pointing: false };
+
+// Wire every slider to a setting
+for (const input of document.querySelectorAll("input[type=range]")) {
+  const out = input.parentElement.querySelector("output");
+  const apply = () => {
+    out.textContent = input.value;
+    settings[input.dataset.key] = Number(input.value) * Number(input.dataset.scale);
+  };
+  input.addEventListener("input", apply);
+  apply();
+}
+
+let landmarker, vw, vh, FW, FH, fog, prev = null, missed = 0;
+let frameCanvas, fctx, blurCanvas, bctx, fogLayer, lctx, maskCanvas, mctx, maskImage;
+let lastVideoTime = -1, lastTime = 0;
+
+function makeCanvas(w, h) {
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const g = c.getContext("2d");
+  g.imageSmoothingEnabled = true;
+  g.imageSmoothingQuality = "high";   // change to "low" if it runs slowly
+  return [c, g];
+}
+
+async function createLandmarker() {
+  const fileset = await FilesetResolver.forVisionTasks(WASM_URL);
+  const make = (delegate) => HandLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: MODEL_URL, delegate },
+    runningMode: "VIDEO",
+    numHands: 1,
+    minHandDetectionConfidence: CONFIDENCE,
+    minHandPresenceConfidence: CONFIDENCE,
+    minTrackingConfidence: CONFIDENCE,
+  });
+  // CPU by default (add ?gpu to the URL to try the GPU model instead)
+  const useGPU = new URLSearchParams(location.search).has("gpu");
+  try { return await make(useGPU ? "GPU" : "CPU"); }
+  catch { return await make(useGPU ? "CPU" : "GPU"); }
+}
+
+function setup() {
+  vw = video.videoWidth; vh = video.videoHeight;
+  canvas.width = vw; canvas.height = vh;
+  FW = Math.round(vw / FOG_DOWNSCALE); FH = Math.round(vh / FOG_DOWNSCALE);
+  fog = new Float32Array(FW * FH).fill(1);          // 1 = fog, 0 = clear
+  [frameCanvas, fctx] = makeCanvas(vw, vh);
+  [blurCanvas, bctx] = makeCanvas(Math.max(1, Math.round(vw / BLUR_DOWNSCALE)),
+                                  Math.max(1, Math.round(vh / BLUR_DOWNSCALE)));
+  [fogLayer, lctx] = makeCanvas(vw, vh);
+  [maskCanvas, mctx] = makeCanvas(FW, FH);
+  maskImage = mctx.createImageData(FW, FH);
+}
+
+// Pointing = the index fingertip reaches clearly farther from the center of the
+// knuckles than the other three fingertips. This works at any hand angle, and
+// it uses hysteresis: starting needs a clearer pose than continuing.
+function isPointing(hand, wasPointing) {
+  const cx = (hand[5].x + hand[9].x + hand[13].x + hand[17].x) / 4;
+  const cy = (hand[5].y + hand[9].y + hand[13].y + hand[17].y) / 4;
+  const reach = (i) => Math.hypot((hand[i].x - cx) * vw, (hand[i].y - cy) * vh);
+  const palm = Math.hypot((hand[5].x - hand[17].x) * vw, (hand[5].y - hand[17].y) * vh);
+
+  const index = reach(8);
+  const others = Math.max(reach(12), reach(16), reach(20));
+  const ratio = wasPointing ? POINT_KEEP : POINT_START;
+  return index > 0.9 * palm && index > ratio * others;
+}
+
+// Clear a soft round spot in the fog (cx, cy, r are in fog-grid units)
+function stamp(cx, cy, r) {
+  const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(FW - 1, Math.ceil(cx + r));
+  const y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(FH - 1, Math.ceil(cy + r));
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const dist = Math.hypot(x - cx, y - cy) / r;
+      if (dist >= 1) continue;
+      const t = Math.min(1, Math.max(0, (dist - 0.5) / 0.5));   // inner half fully clear
+      const v = t * t * (3 - 2 * t);                            // smooth falloff at the edge
+      const i = y * FW + x;
+      if (v < fog[i]) fog[i] = v;
+    }
+  }
+}
+
+function stroke(x0, y0, x1, y1, r) {
+  const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / (r / 2)));
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    stamp(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, r);
+  }
+}
+
+function track(now) {
+  const result = landmarker.detectForVideo(video, now);
+  const hand = result.landmarks[0] || null;
+  const pointing = !!hand && isPointing(hand, prev !== null);
+  debug.dets++; debug.hand = hand; debug.pointing = pointing;
+
+  if (pointing) {
+    missed = 0;
+    let x = (1 - hand[8].x) * FW;   // 1 - x because the display is mirrored
+    let y = hand[8].y * FH;
+    const r = Math.max(1, (settings.brush / 2) * FW / vw);
+    if (prev) {
+      x = prev.x + settings.smoothing * (x - prev.x);
+      y = prev.y + settings.smoothing * (y - prev.y);
+      stroke(prev.x, prev.y, x, y, r);
+    } else {
+      stamp(x, y, r);
+    }
+    prev = { x, y };
+  } else if (++missed > MAX_MISSED) {
+    prev = null;   // finger lifted: the next stroke starts fresh
+  }
+}
+
+function render() {
+  // 1. Mirrored camera frame
+  fctx.save();
+  fctx.translate(vw, 0); fctx.scale(-1, 1);
+  fctx.drawImage(video, 0, 0, vw, vh);
+  fctx.restore();
+
+  // 2. Blurred copy (shrink, then enlarge with smoothing)
+  bctx.drawImage(frameCanvas, 0, 0, blurCanvas.width, blurCanvas.height);
+
+  // 3. Fog mask as the alpha channel of a small image
+  const data = maskImage.data;
+  for (let i = 0; i < fog.length; i++) data[i * 4 + 3] = fog[i] * 255;
+  mctx.putImageData(maskImage, 0, 0);
+
+  // 4. Fog layer = blurred frame washed toward white, cut out by the mask
+  lctx.globalCompositeOperation = "source-over";
+  lctx.clearRect(0, 0, vw, vh);
+  lctx.drawImage(blurCanvas, 0, 0, vw, vh);
+  lctx.globalAlpha = settings.fogStrength;
+  lctx.fillStyle = "#fff";
+  lctx.fillRect(0, 0, vw, vh);
+  lctx.globalAlpha = 1;
+  lctx.globalCompositeOperation = "destination-in";
+  lctx.drawImage(maskCanvas, 0, 0, vw, vh);
+  lctx.globalCompositeOperation = "source-over";
+
+  // 5. Clear frame with the fog on top
+  ctx.drawImage(frameCanvas, 0, 0);
+  ctx.drawImage(fogLayer, 0, 0);
+}
+
+function drawDebug() {
+  ctx.fillStyle = "#0f0";
+  for (const p of debug.hand ?? []) ctx.fillRect((1 - p.x) * vw - 2, p.y * vh - 2, 4, 4);
+  ctx.fillStyle = "rgba(0,0,0,0.6)";
+  ctx.fillRect(0, 0, 330, 52);
+  ctx.fillStyle = "#0f0";
+  ctx.font = "16px monospace";
+  ctx.fillText(`render ${debug.fps} fps | tracking ${debug.det} fps`, 8, 20);
+  ctx.fillText(`hand: ${debug.hand ? "yes" : "no"} | pointing: ${debug.pointing ? "yes" : "no"}`, 8, 42);
+}
+
+function loop(now) {
+  requestAnimationFrame(loop);
+  if (settings.paused) { lastTime = now; return; }
+  const dt = Math.min(0.1, (now - lastTime) / 1000);
+  lastTime = now;
+
+  if (video.currentTime !== lastVideoTime) {   // only run the model on new camera frames
+    lastVideoTime = video.currentTime;
+    track(now);
+  }
+
+  const grow = settings.regrow * dt;           // fog creeps back over time
+  if (grow > 0) for (let i = 0; i < fog.length; i++) fog[i] = Math.min(1, fog[i] + grow);
+
+  render();
+
+  debug.frames++;
+  if (now - debug.t > 1000) {
+    debug.fps = debug.frames; debug.det = debug.dets;
+    debug.frames = debug.dets = 0; debug.t = now;
+  }
+  if (debug.on) drawDebug();
+}
+
+$("start").addEventListener("click", async () => {
+  const status = (msg) => { $("status").textContent = msg; };
+  $("start").disabled = true;
+  try {
+    status("Loading hand model...");
+    landmarker = await createLandmarker();
+    status("Starting camera...");
+    video.srcObject = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+      audio: false,
+    });
+    await video.play();
+    setup();
+    $("overlay").hidden = true;
+    lastTime = performance.now();
+    requestAnimationFrame(loop);
+  } catch (err) {
+    console.error(err);
+    status("Could not start: " + err.message + ". Check camera permission and try again.");
+    $("start").disabled = false;
+  }
+});
+
+$("refill").addEventListener("click", () => fog && fog.fill(1));
+$("pause").addEventListener("click", (e) => {
+  settings.paused = !settings.paused;
+  e.target.textContent = settings.paused ? "Resume" : "Pause";
+});
+$("save").addEventListener("click", () => {
+  canvas.toBlob((blob) => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "foggy-mirror.png";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+});
+</script>
+</body>
+</html>
