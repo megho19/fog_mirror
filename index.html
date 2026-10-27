@@ -10,7 +10,7 @@
          font-family: system-ui, -apple-system, sans-serif; }
   main { position: relative; min-height: 100vh; display: flex; align-items: center;
          justify-content: center; padding: 12px; box-sizing: border-box; }
-  canvas { max-width: 100%; max-height: calc(100vh - 24px); background: #000; border-radius: 8px; }
+  canvas { max-width: 100%; max-height: calc(100vh - 24px); background: #f5f1f1; border-radius: 8px; }
   #overlay { position: absolute; inset: 0; display: flex; flex-direction: column;
              align-items: center; justify-content: center; gap: 12px; text-align: center; padding: 24px; }
   #overlay[hidden] { display: none; }
@@ -18,19 +18,19 @@
   #overlay p { margin: 0; color: #aaa; max-width: 32ch; }
 
   button { padding: 10px; border: 0; border-radius: 6px; background: #3b82f6;
-           color: #fff; font-size: 15px; cursor: pointer; }
+           color: #a7a2a2; font-size: 15px; cursor: pointer; }
   button:disabled { background: #444; cursor: default; }
   button.secondary { background: #333; }
 
   /* Settings drawer */
   #toggle { position: fixed; top: 12px; right: 12px; z-index: 20; padding: 8px 14px;
-            background: rgba(40, 40, 40, 0.85); backdrop-filter: blur(6px); }
+            background: rgba(199, 197, 197, 0.85); backdrop-filter: blur(6px); }
   #toggle:hover { background: rgba(70, 70, 70, 0.9); }
   #panel { position: fixed; top: 0; right: 0; bottom: 0; z-index: 10;
            width: min(280px, 85vw); box-sizing: border-box; padding: 64px 16px 16px;
            display: flex; flex-direction: column; gap: 14px; overflow-y: auto;
-           background: rgba(27, 27, 27, 0.94); backdrop-filter: blur(8px);
-           box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4);
+           background: rgba(249, 248, 248, 0.94); backdrop-filter: blur(8px);
+           box-shadow: -8px 0 24px rgba(228, 226, 226, 0.4);
            transform: translateX(100%); visibility: hidden;
            transition: transform 0.25s ease, visibility 0.25s; }
   #panel.open { transform: translateX(0); visibility: visible; }
